@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>three.js webgl </title>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+	<style>
+		html, body {
+			height: 100%;
+			width: 100%;
+			margin: 0;
+			background-color: #000;
+			color: #fff;
+			font-family: Monospace;
+			font-size: 13px;
+			line-height: 24px;
+			overscroll-behavior: none;
+		}
+	</style>
+</head>
+<body>
+	<div id="container"></div>
+
+<script id="vertexShader" type="x-shader/x-vertex">
+	varying vec2 vUv;
+	varying vec3 vWorldPosition;
+	varying vec3 vWorldNormal;
+
+	void main() {
+		vUv = uv;
+	  	vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+	  	vWorldNormal = normalize(vec3(vec4(normal, 0.0) * modelMatrix));
+	  	gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+	}
+</script>
+<script id="fragmentShader" type="x-shader/x-vertex">
+varying vec2 vUv;
+varying vec3 vWorldPosition;
+varying vec3 vWorldNormal;
+
+uniform float u_Progress1;
+uniform float u_Progress2;
+uniform float u_Progress3;
+uniform float u_TransitionSmoothness;
+uniform float u_Time;
+uniform vec3 u_Color;
+uniform float u_FresnelFalloff;
+uniform sampler2D t_AlphaMap;
+
+float rand(vec2 n) {
+	return fract(sin(dot(n, vec2(12.9898, 4.1414))) * 43758.5453);
+}
+
+float noise(vec2 p){
+	vec2 ip = floor(p);
+	vec2 u = fract(p);
+	u = u*u*(3.0-2.0*u);
+
+	float res = mix(
+		mix(rand(ip),rand(ip+vec2(1.0,0.0)),u.x),
+		mix(rand(ip+vec2(0.0,1.0)),rand(ip+vec2(1.0,1.0)),u.x),u.y);
+	return res*res;
+}
+float remap(float value, float low1, float high1, float low2, float high2) {
+  return low2 + (high2 - low2) * (value - low1) / (high1 - low1);
+}
+
+float fresnel(vec3 cameraPosition, vec3 worldPosition, vec3 worldNormal, float falloff) {
+  vec3 viewDirection = normalize(cameraPosition - worldPosition);
+
+  float effect = dot(viewDirection, worldNormal);
+  effect = clamp(1.0 - effect, 0., 1.0);
+  effect = pow(effect, falloff);
+
+  return effect;
+}
+
+float random(float n) {
+  return fract(sin(n) * 43758.5453123);
+}
+
+void main() {
+  vec2 gv = floor(vUv * 35.0 - vec2(0.0, u_Time*1.5));
+  float pattern = noise(gv);
+
+  // alpha map
+  float alphaMapB = texture2D(t_AlphaMap, vUv * vec2(0.0, 0.8) + vec2(0.0, u_Time*0.03)).b;
+
+  // Noise
+  float noisy = noise(floor(vUv*1300.) + floor(random(u_Time)*100.0));
+  noisy *= alphaMapB;
+
+  // Fresnel
+  float frn = fresnel(cameraPosition, vWorldPosition, vWorldNormal, u_FresnelFalloff);
+
+
+  vec4 l1 = vec4(u_Color, 0.5);
+  vec4 l2 = vec4(u_Color, 1.0);
+  l2 = l2 * clamp(alphaMapB, 0.1, 0.85);
+  l2.a = clamp(noisy, 0.0, 0.35);
+
+  #if !defined(FLIP_SIDED)
+    l2 = mix(l2, l1, frn);
+  #endif
+
+  vec4 l3 = vec4(u_Color, 1.0);
+  l3 = l3 * step(0.99, fract(vUv.y*4.6+u_Time*0.3));
+
+  // 01. Base layer
+  float p1 = u_Progress1;
+  p1 = remap(p1, 0.0, 1.0, -u_TransitionSmoothness, 1.0);
+  p1 = smoothstep(p1, p1 + u_TransitionSmoothness, 1.0 - vUv.y);
+
+  float mix1 = 2.0*p1 - pattern;
+  mix1 = clamp(mix1, 0.0, 1.0);
+
+  // 02. Wide bands layer
+  float p2 = u_Progress2;
+  p2 = remap(p2, 0.0, 1.0, -u_TransitionSmoothness, 1.0);
+  p2 = smoothstep(p2, p2 + u_TransitionSmoothness, 1.0 - vUv.y);
+
+  float mix2 = 2.0*p2 - pattern;
+  mix2 = clamp(mix2, 0.0, 1.0);
+
+  // 03. Thin bands layer
+  float p3 = u_Progress3;
+  p3 = remap(p3, 0.0, 1.0, -u_TransitionSmoothness, 1.0);
+  p3 = smoothstep(p3, p3 + u_TransitionSmoothness, 1.0 - vUv.y);
+
+  float mix3 = 2.0*p3 - pattern;
+  mix3 = clamp(mix3, 0.0, 1.0);
+
+  // Mix layers
+  vec4 layer1 = mix(vec4(0.0), l1, 1.0 - mix1);
+  vec4 layer2 = mix(layer1, l2, 1.0 - mix2);
+  vec4 layer3 = mix(layer2, l3, l3.a*(1.0 - mix3));
+  vec4 color = layer3;
+  gl_FragColor = color;
+  // cool colors
+  // gl_FragColor = vec4(vWorldPosition*vWorldNormal, 1.0);
+}
+</script>
+
+
+
+<script id="vertexShader2" type="x-shader/x-vertex">
+    varying vec3 vNormal;
+    varying vec3 vPositionNormal;
+    varying vec2 vUv;
+    void main()
+    {
+      vUv = uv;
+      vNormal = normalize( normalMatrix * normal );
+      vPositionNormal = normalize(( modelViewMatrix * vec4(position, 1.0) ).xyz);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+    }
+  </script>
+	<!-- fragment shader a.k.a. pixel shader -->
+	<script id="fragmentShader2" type="x-shader/x-vertex">
+    uniform vec3 glowColor;
+    uniform float time;
+    uniform sampler2D colorTexture;
+    uniform float b;
+    uniform float p;
+    uniform float s;
+    varying vec3 vNormal;
+    varying vec2 vUv;
+    varying vec3 vPositionNormal;
+    uniform vec2 repeat;
+    void main()
+    {
+      float a = pow( b + s * abs(dot(vNormal, vPositionNormal)), p );
+      vec4 color = texture2D(colorTexture,vec2(vUv.x,fract(vUv.y-time)));
+      gl_FragColor = vec4(glowColor,a);
+    }
+  </script>
+<script type="module">
+
+
+	import * as THREE from '../build/three.module.js';
+	import {OrbitControls} from './jsm/controls/OrbitControls.js';
+	import Stats from './jsm/libs/stats.module.js';
+	import {GLTFLoader} from './jsm/loaders/GLTFLoader.js';
+	var WIDTH = window.innerWidth;
+	var HEIGHT = window.innerHeight;
+	var renderer, scene, camera, orbitcontrols, stats, gui;
+	var clock = new THREE.Clock();
+	var globeTextureLoader = new THREE.TextureLoader();
+	var index=0
+	var holoMaterial;
+	var swirlTexture;
+
+	init();
+	animate();
+	window.addEventListener('resize', onWindowResize, false);
+
+	function init() {
+		initStats()
+		initRenderer();
+		initScene();
+		initLights();
+		initCamera();
+		initControls();
+		// initHelp();
+		initGlb();
+		initPillar();
+		initUnderLight();
+		initSwirl()
+	}
+
+	function initStats() {
+		stats = new Stats();
+		document.body.appendChild(stats.dom);
+		stats.domElement.style.position = 'absolute';
+		stats.domElement.style.left = '0px';
+		stats.domElement.style.top = '0px';
+	}
+
+	function initRenderer() {
+		var container = document.getElementById('container');
+		renderer = new THREE.WebGLRenderer({antialias: true});//, alpha: true, logarithmicDepthBuffer: true
+		renderer.setPixelRatio(window.devicePixelRatio);
+		renderer.setSize(WIDTH, HEIGHT);
+		container.appendChild(renderer.domElement);
+	}
+
+	function initScene() {
+		scene = new THREE.Scene();
+	}
+
+	function initCamera() {
+		camera = new THREE.PerspectiveCamera(45, WIDTH / HEIGHT, 0.1, 1000);
+		// 确定相机位置 并将相机指向场景中心
+		camera.position.set(0,10,25);
+		// camera.position.z=25
+		camera.lookAt(new THREE.Vector3(0, 13, 0));
+	}
+
+	function initControls() {
+		orbitcontrols = new OrbitControls(camera, renderer.domElement);
+		
+
+		//Damping or rotation when making an animation loop Meaning with or without inertia
+		orbitcontrols.enableDamping = true;
+		//Dynamic damping factor is the mouse dragging and rotation sensitivity
+		//controls.dampingFactor = 0.25;
+		//Scalable or not
+		orbitcontrols.enableZoom = true;
+		//Rotate automatically or not
+		orbitcontrols.autoRotate = true;
+		orbitcontrols.autoRotateSpeed = 10;
+		//Set the farthest distance of the camera from the origin
+		orbitcontrols.minDistance = 1;
+		//Set the farthest distance of the camera from the origin
+		orbitcontrols.maxDistance = 2000;
+		//Whether to enable right-click drag and drop
+		orbitcontrols.enablePan = false;
+		orbitcontrols.maxPolarAngle = Math.PI / 2
+		orbitcontrols.target=new THREE.Vector3(0,5,0)
+	}
+
+
+
+	function initLights() {
+		scene.add(new THREE.AmbientLight(0xffffff,1));
+		var light = new THREE.PointLight(0xffffff);
+		light.position.set(0,1, 0);
+		light.castShadow = true;
+		scene.add(light);
+	}
+
+	function initHelp() {
+		
+		var axes = new THREE.AxesHelper(10000);
+		scene.add(axes);
+	}
+
+	function initFloor(){
+		var planeTexture = globeTextureLoader.load( './imgs/pointFly/tile.png' );
+		planeTexture.wrapS = planeTexture.wrapT = THREE.RepeatWrapping;
+		planeTexture.repeat.set(16, 16);
+		const planeGeometry = new THREE.PlaneGeometry(100, 100, 1, 1);
+		const planeMaterial = new THREE.MeshPhongMaterial({
+			map: planeTexture,
+			bumpMap: planeTexture,
+			bumpScale: 1.0,
+			shininess: 3, //Glossiness
+			specularMap: planeTexture,
+			side: THREE.BackSide
+		});
+		const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+		plane.rotation.x = Math.PI/2;
+		scene.add(plane);
+
+	}
+
+	/**
+	 * Ground luminaries
+	 */
+	function initUnderLight(){
+		const groundTexture = globeTextureLoader.load("./imgs/quanxi/ground.png");
+		const ground = new THREE.Mesh(
+				new THREE.PlaneGeometry(10, 10, 32, 32),
+				new THREE.MeshBasicMaterial({
+					color: '#007eff',
+					map: groundTexture,
+					side: THREE.DoubleSide,
+					transparent: true,
+					depthTest: false,
+					blending: THREE.AdditiveBlending
+				})
+		);
+		ground.scale.multiplyScalar(0.8);
+		ground.rotation.x =  Math.PI/180*90;
+		ground.position.set(0, 0.02, 0);
+		scene.add(ground);
+	}
+
+	function initGlb(){
+		let glbUrl='./models/gltf/pp.glb';
+		var uniforms ={
+			s:   { type: "f", value: -1}, //The bigger you are, the less transparent you are
+			b:   { type: "f", value: 1}, //
+			p:   { type: "f", value: 1 }, //0 is Completely opaque, the larger it is the more transparent it becomes
+			glowColor: { type: "c", value: new THREE.Color('#007bfe') },//0x00B3FE
+		}
+		var modelmaterial = new THREE.ShaderMaterial({
+			//The bias value determines the position of the brightest value of the colour and the power determines the rate of change of the transparency and.
+			uniforms:uniforms,
+			vertexShader:   document.getElementById( 'vertexShader2').textContent,
+			fragmentShader: document.getElementById( 'fragmentShader2' ).textContent,
+			side: THREE.FrontSide,
+			blending: THREE.AdditiveBlending,
+			transparent: true,
+			opacity: 1,
+			depthTest:false
+		})
+
+		var loader = new GLTFLoader();
+		loader.load( glbUrl, function ( gltf ) {
+			gltf.scene.traverse( function ( child ) {
+				if ( child.isMesh ) {
+					child.material = modelmaterial.clone();
+					child.material.uniforms.p.value=1.5;
+					child.scale.multiplyScalar(1.8)
+					scene.add(child)
+				}
+			})
+		})
+	}
+
+	/**
+	 * Holographic Pillar of Light
+	 */
+	function initPillar(){
+		const alphaTexture = globeTextureLoader.load( "./imgs/quanxi/Holo_Alpha.png" );
+		alphaTexture.wrapS = THREE.RepeatWrapping
+		alphaTexture.wrapT = THREE.RepeatWrapping
+
+		holoMaterial =  new THREE.ShaderMaterial({
+			vertexShader: document.getElementById('vertexShader').textContent,
+			fragmentShader: document.getElementById('fragmentShader').textContent,
+			transparent: true,
+			side: THREE.DoubleSide,
+			blending: THREE.AdditiveBlending,
+			uniforms: {
+				u_Progress1: { value: 0 },
+				u_Progress2: { value: 0 },
+				u_Progress3: { value: 0 },
+				u_TransitionSmoothness: { value: 0.9 },
+				u_Color: { value: new THREE.Color('#007bfd') },//187cd9
+				u_Time: { value: 0 },
+				u_FresnelFalloff: { value: 1.13 },
+				t_AlphaMap: { value: alphaTexture }
+			}
+		})
+		createCylinder(2,6,11,holoMaterial)
+	}
+
+	function createCylinder(topRadius,bottomRadius,height,material){
+		const geometry = new THREE.CylinderGeometry( topRadius, bottomRadius, height, 64, 1, true );
+		let cylinder = new THREE.Mesh(geometry, material);
+		cylinder.position.set(0, height / 2, 0);
+		cylinder.rotation.z-=Math.PI
+		scene.add(cylinder)
+	}
+
+	/**
+	 * Whirlpool
+	 */
+	function initSwirl(){
+		swirlTexture =globeTextureLoader.load("./imgs/quanxi/swirl.png");
+		swirlTexture.offset.y = -0.25;
+		swirlTexture.wrapS = THREE.RepeatWrapping;
+		const geometry = new THREE.TorusGeometry(6, 3, 2, 100);
+		const material = new THREE.MeshBasicMaterial({
+			color: 0x007eff,
+			map: swirlTexture,
+			transparent: true,
+			wireframe: false,
+			blending: THREE.AdditiveBlending
+		});
+		const torus = new THREE.Mesh(geometry, material);
+		torus.position.y = 0.01;
+		torus.rotation.x = (90 * Math.PI) / 180;
+		scene.add(torus);
+	}
+
+	/**
+	 * Initialise some things
+	 * @param obj
+	 */
+	function initParams(obj){
+		obj.position.set(0, 0, 0);
+		obj.scale.multiplyScalar(1);
+		obj.velocity = new THREE.Vector3(
+				randomByValue(-0.025, 0.025),
+				randomByValue(0.05, 0.1),
+				randomByValue(-0.025, 0.025)
+		);
+		obj.material.opacity = 1;
+	}
+
+	function randomByValue(min,max){
+		return Math.random() * (max - min) + min;
+	}
+
+	function onError() {
+		alert("报错了");
+	}
+
+	function onWindowResize() {
+		camera.aspect = container.offsetWidth / container.offsetHeight;
+		camera.updateProjectionMatrix();
+		renderer.setSize(window.innerWidth, window.innerHeight);
+	}
+
+	function animate() {
+		stats.update();
+		requestAnimationFrame(animate);
+		const elapsed = clock.getElapsedTime()
+		//Holographic Aperture
+		if(holoMaterial){
+			holoMaterial.uniforms.u_Time.value = elapsed
+			if(holoMaterial.uniforms.u_Progress1.value<1){
+				holoMaterial.uniforms.u_Progress1.value+=0.01
+				holoMaterial.uniforms.u_Progress2.value+=0.01
+				holoMaterial.uniforms.u_Progress3.value+=0.01
+			}
+		}
+		index++;
+		//Whirlpool
+		if(swirlTexture){
+			const angle = Math.PI/180 * index;
+			swirlTexture.offset.x = -angle * 0.2;
+		}
+		if (orbitcontrols) orbitcontrols.update();
+		renderer.render(scene, camera);
+	}
+</script>
+</body>
+</html>
